@@ -72,25 +72,40 @@ def get_extensions():
 
     nvcc_flags = os.getenv("NVCC_FLAGS", "")
     nvcc_flags = [] if nvcc_flags == "" else nvcc_flags.split(" ")
-    nvcc_flags += ["-O3", "--use_fast_math"]
-    if LINE_INFO:
-        nvcc_flags += ["-lineinfo"]
     if torch.version.hip:
+        # hipcc/clang: no --use_fast_math / -diag-suppress / -lineinfo.
+        # Native float atomics: without this, hipcc lowers every float atomicAdd to a compare-and-swap loop.
+        nvcc_flags += ["-O3", "-munsafe-fp-atomics"]
+        if LINE_INFO:
+            nvcc_flags += ["-gline-tables-only"]
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:
         define_macros += [("USE_ROCM", None)]
         undef_macros += ["__HIP_NO_HALF_CONVERSIONS__"]
     else:
+        nvcc_flags += ["-O3", "--use_fast_math"]
+        if LINE_INFO:
+            nvcc_flags += ["-lineinfo"]
         nvcc_flags += ["--expt-relaxed-constexpr"]
-
-    # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
-    nvcc_flags += ["-diag-suppress", "20012,186"]
+        # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
+        nvcc_flags += ["-diag-suppress", "20012,186"]
     extra_compile_args["nvcc"] = nvcc_flags
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
     current_dir = pathlib.Path(__file__).parent.resolve()
     glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
+    if torch.version.hip:
+        # torch's hipify rewrites every header it can find under the project
+        # directory, which mangles GLM's relative includes and its compiler
+        # detection. Keep GLM outside the project tree so it is left alone.
+        import shutil
+        import tempfile
+
+        glm_hip_path = os.path.join(tempfile.gettempdir(), f"gsplat-{__version__}-glm")
+        if not os.path.exists(os.path.join(glm_hip_path, "glm", "glm.hpp")):
+            shutil.copytree(glm_path, glm_hip_path, dirs_exist_ok=True)
+        glm_path = glm_hip_path
     extension_v2 = CUDAExtension(
         "gsplat.csrc",
         sources_v2,

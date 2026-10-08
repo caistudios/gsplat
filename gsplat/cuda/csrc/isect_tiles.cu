@@ -5,6 +5,11 @@
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 
+#ifdef USE_ROCM
+// hipify rewrites <cub/cub.cuh> to hipcub but leaves cub::DoubleBuffer alone.
+namespace cub = hipcub;
+#endif
+
 namespace gsplat {
 
 namespace cg = cooperative_groups;

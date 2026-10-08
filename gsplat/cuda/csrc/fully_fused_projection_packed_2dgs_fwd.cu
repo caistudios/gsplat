@@ -4,7 +4,11 @@
 #include "utils.cuh"
 
 #include <cooperative_groups.h>
+#ifdef USE_ROCM
+#include <hip/amd_detail/amd_hip_cooperative_groups_reduce.h>
+#else
 #include <cooperative_groups/reduce.h>
+#endif
 #include <cub/cub.cuh>
 #include <cuda.h>
 #include <cuda_runtime.h>

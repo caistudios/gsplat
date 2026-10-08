@@ -364,6 +364,7 @@ call_kernel_with_dim(
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
+#ifndef USE_ROCM
     if (cudaFuncSetAttribute(
             rasterize_to_pixels_fwd_2dgs_kernel<CDIM, float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -375,6 +376,7 @@ call_kernel_with_dim(
             " bytes), try lowering tile_size."
         );
     }
+#endif
     rasterize_to_pixels_fwd_2dgs_kernel<CDIM, float>
         <<<blocks, threads, shared_mem, stream>>>(
             C,

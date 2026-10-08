@@ -251,6 +251,7 @@ rasterize_to_indices_in_range_2dgs_tensor(
         tile_size * tile_size *
         (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>) +
          sizeof(vec3<float>) + sizeof(vec3<float>));
+#ifndef USE_ROCM
     if (cudaFuncSetAttribute(
             rasterize_to_indices_in_range_kernel<float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -262,6 +263,7 @@ rasterize_to_indices_in_range_2dgs_tensor(
             " bytes), try lowering tile_size."
         );
     }
+#endif
 
     // First pass: count the number of gaussians that contribute to each pixel
     int64_t n_elems;

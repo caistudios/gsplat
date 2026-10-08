@@ -546,6 +546,7 @@ call_kernel_with_dim(
              sizeof(float) * COLOR_DIM + sizeof(float) * 3);
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
+#ifndef USE_ROCM
         if (cudaFuncSetAttribute(
                 rasterize_to_pixels_bwd_2dgs_kernel<CDIM, float>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -557,6 +558,7 @@ call_kernel_with_dim(
                 " bytes), try lowering tile_size."
             );
         }
+#endif
         rasterize_to_pixels_bwd_2dgs_kernel<CDIM, float>
             <<<blocks, threads, shared_mem, stream>>>(
                 C,
