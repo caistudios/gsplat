@@ -155,7 +155,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     const uint32_t tile_width,
     const uint32_t tile_height,
     const bool sort,
-    const bool double_buffer
+    const bool double_buffer,
+    const at::optional<torch::Tensor> &conics,  // [C, N, 3] or [nnz, 3]
+    const at::optional<torch::Tensor> &opacities // [C, N] or [nnz]
 );
 
 torch::Tensor isect_offset_encode_tensor(

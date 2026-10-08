@@ -505,6 +505,8 @@ def rasterization(
         n_cameras=C,
         camera_ids=camera_ids,
         gaussian_ids=gaussian_ids,
+        conics=conics,
+        opacities=opacities,
     )
     # print("rank", world_rank, "Before isect_offset_encode")
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
