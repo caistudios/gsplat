@@ -9,12 +9,12 @@ export UV_CACHE_DIR=/tmp/uv-cache MAX_JOBS=${MAX_JOBS:-4}
 
 case "$BACKEND" in
   cuda)
-    export GSPLAT_LOCAL_VERSION=cu126 CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9"
+    export GSPLAT_LOCAL_VERSION=cu126.cull CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9"
     uv venv --python 3.12 /tmp/venv
     uv pip install --python /tmp/venv/bin/python --index-url https://download.pytorch.org/whl/cu126 "torch==$TORCH"
     ;;
   rocm)
-    export GSPLAT_LOCAL_VERSION=rocm714 ROCM_HOME=/opt/rocm PYTORCH_ROCM_ARCH=gfx1151
+    export GSPLAT_LOCAL_VERSION=rocm714.cull ROCM_HOME=/opt/rocm PYTORCH_ROCM_ARCH=gfx1151
     uv venv --python /usr/bin/python3 /tmp/venv
     uv pip install --python /tmp/venv/bin/python --index-url https://download.pytorch.org/whl/rocm7.14 \
       "torch==$TORCH+rocm7.14"
