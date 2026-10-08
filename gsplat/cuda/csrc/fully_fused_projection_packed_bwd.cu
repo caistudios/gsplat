@@ -56,9 +56,21 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
 ) {
     // parallelize over nnz.
     uint32_t idx = cg::this_grid().thread_rank();
+#ifdef USE_ROCM
+    // Keep every lane alive when v_viewmats is wanted, so it can be summed over the wave below: lanes past nnz redo
+    // the last element and write nothing.
+    const bool valid = idx < nnz;
+    if (!valid) {
+        if (v_viewmats == nullptr) {
+            return;
+        }
+        idx = nnz - 1;
+    }
+#else
     if (idx >= nnz) {
         return;
     }
+#endif
     const int64_t cid = camera_ids[idx];   // camera id
     const int64_t gid = gaussian_ids[idx]; // gaussian id
 
@@ -198,6 +210,10 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     covar_world_to_cam_vjp(R, covar, v_covar_c, v_R, v_covar);
 
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+#ifdef USE_ROCM
+    if (!valid) {
+    } else
+#endif
     if (sparse_grad) {
         // write out results with sparse layout
         if (v_means != nullptr) {
@@ -283,6 +299,52 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         }
     }
     // v_viewmats is always in dense layout
+#ifdef USE_ROCM
+    // Every Gaussian of a camera adds to the same 12 numbers. When the wave's lanes share one camera (always for a
+    // single view; camera_ids are sorted), sum over the wave and let 12 lanes add one number each, instead of 12
+    // contended atomics per lane (60x slower for 40k Gaussians).
+    if (v_viewmats != nullptr) {
+        if (!valid) {
+            v_R = mat3<T>(0.f);
+            v_t = vec3<T>(0.f);
+        }
+        const int64_t cid0 = __shfl(cid, 0);
+        if (__all(cid == cid0)) {
+            GSPLAT_PRAGMA_UNROLL
+            for (uint32_t j = 0; j < 3; j++) {
+                v_R[j][0] = wave32_sum(v_R[j][0]);
+                v_R[j][1] = wave32_sum(v_R[j][1]);
+                v_R[j][2] = wave32_sum(v_R[j][2]);
+            }
+            v_t = vec3<T>(wave32_sum(v_t[0]), wave32_sum(v_t[1]), wave32_sum(v_t[2]));
+            const uint32_t lane = warp.thread_rank();
+            if (lane < 12) {
+                const uint32_t i = lane / 4, j = lane % 4; // row, column of the 3x4 block
+                T val = v_t[0];
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t r = 0; r < 3; r++) {
+                    GSPLAT_PRAGMA_UNROLL
+                    for (uint32_t c = 0; c < 4; c++) {
+                        if (i == r && j == c) {
+                            val = c < 3 ? v_R[c][r] : v_t[r];
+                        }
+                    }
+                }
+                gpuAtomicAdd(v_viewmats + cid0 * 16 + i * 4 + j, val);
+            }
+        } else if (valid) {
+            v_viewmats += cid * 16;
+            GSPLAT_PRAGMA_UNROLL
+            for (uint32_t i = 0; i < 3; i++) {
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t j = 0; j < 3; j++) {
+                    gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
+                }
+                gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
+            }
+        }
+    }
+#else
     if (v_viewmats != nullptr) {
         auto warp_group_c = cg::labeled_partition(warp, cid);
         warpSum(v_R, warp_group_c);
@@ -299,6 +361,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             }
         }
     }
+#endif
 }
 
 std::tuple<
