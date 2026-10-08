@@ -18,6 +18,10 @@ namespace cg = cooperative_groups;
  * Gaussian Tile Intersection
  ****************************************************************************/
 
+// The alpha check runs serially over a Gaussian's tiles. Past this many tiles it costs more than the
+// intersections it saves, so larger Gaussians skip it.
+constexpr int64_t CULL_MAX_TILES = 64;
+
 // Can a Gaussian (2D mean, conic, opacity) reach alpha >= 1/255 at a pixel centre of the tile [x, x + size) x
 // [y, y + size)? Conservative: the smallest sigma over the rectangle spanned by the pixel centres, with a 1% margin
 // on the cutoff for float rounding. Not inlined, so both passes of isect_tiles run the same instructions.
@@ -102,7 +106,9 @@ __global__ void isect_tiles(
     // The radius is a 3-sigma square around the mean: most of its tiles never see the Gaussian reach the
     // rasterizer's alpha cutoff (1/255), which skips it at every pixel there. Listing only the tiles where it can
     // reach the cutoff renders the same image (and gradients) with ~half the intersections to sort and visit.
-    const bool cull = conics != nullptr && opacities != nullptr;
+    // Above CULL_MAX_TILES the Gaussian keeps every tile in its bbox, as the unculled path does.
+    const int64_t bbox_tiles = (int64_t)(tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
+    const bool cull = conics != nullptr && opacities != nullptr && bbox_tiles <= CULL_MAX_TILES;
     vec3<OpT> conic(0.f);
     OpT opacity = 1.f;
     if (cull) {
