@@ -36,6 +36,20 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
+#ifdef USE_ROCM
+// Sum over a full wave32 (all 32 lanes active); every lane gets the total. DPP adds inside each 16-lane row, then
+// the two rows swap. HIP's cg::reduce on a thread_block_tile is a generic loop of ds_bpermute with exec-mask
+// bookkeeping, several times slower, and this kernel does nine of them per Gaussian and warp.
+__device__ __forceinline__ float wave32_sum(float v) {
+    v += __int_as_float(__builtin_amdgcn_update_dpp(0, __float_as_int(v), 0xB1, 0xF, 0xF, true));  // quad_perm 1,0,3,2
+    v += __int_as_float(__builtin_amdgcn_update_dpp(0, __float_as_int(v), 0x4E, 0xF, 0xF, true));  // quad_perm 2,3,0,1
+    v += __int_as_float(__builtin_amdgcn_update_dpp(0, __float_as_int(v), 0x141, 0xF, 0xF, true)); // row_half_mirror
+    v += __int_as_float(__builtin_amdgcn_update_dpp(0, __float_as_int(v), 0x140, 0xF, 0xF, true)); // row_mirror
+    v += __int_as_float(__builtin_amdgcn_permlanex16(0, __float_as_int(v), 0x76543210, 0xfedcba98, true, false));
+    return v;
+}
+#endif
+
 template <class WarpT, class T>
 inline __device__ T groupSum(WarpT &warp, T val) {
     return cg::reduce(warp, val, cg::plus<T>());
