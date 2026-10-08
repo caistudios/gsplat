@@ -1,0 +1,103 @@
+# Builds the gsplat 1.4.0 wheels of this branch for torch 2.14.1 and python 3.12:
+#   cuda: CUDA 12.6, sm_80/86/89            -> gsplat-1.4.0+cu126-cp312-cp312-linux_x86_64.whl
+#   rocm: ROCm 7.14, gfx1151 (Strix Halo)   -> gsplat-1.4.0+rocm714-cp312-cp312-linux_x86_64.whl
+# No GPU is needed, only the compilers. A push to the branches below uploads the wheels as workflow artifacts.
+# A tag v1.4.0-rocm.* also publishes both wheels and a SHA256SUMS file as a GitHub Release named after the tag.
+name: wheels
+
+on:
+  push:
+    branches: [v1.4.0-rocm, rocm-fast-and-culling]
+    tags: ["v1.4.0-rocm.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.backend }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cuda
+            image: nvidia/cuda:12.6.3-devel-ubuntu22.04
+          - backend: rocm
+            image: rocm/dev-ubuntu-24.04:7.14.1-full
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # The ROCm image is ~8 GB compressed and torch's ROCm wheel is several more: drop preinstalled
+      # toolchains this build does not use, and keep Docker's data on the larger /mnt disk when there is one.
+      - name: Free disk
+        run: |
+          df -h / /mnt || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium
+          sudo docker image prune -af
+          if mountpoint -q /mnt; then
+            sudo systemctl stop docker docker.socket
+            conf=/etc/docker/daemon.json
+            { [ -s $conf ] && sudo cat $conf || echo '{}'; } | jq '. + {"data-root": "/mnt/docker"}' > /tmp/daemon.json
+            sudo mv /tmp/daemon.json $conf
+            sudo systemctl start docker
+          fi
+          docker info --format 'docker data root: {{.DockerRootDir}}'
+          df -h / /mnt || true
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+
+      - name: Build the wheel
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          docker run --rm -e MAX_JOBS=4 \
+            -v "$PWD:/src:ro" -v "$RUNNER_TEMP/out:/out" -v "$(command -v uv):/usr/local/bin/uv:ro" \
+            "${{ matrix.image }}" bash /src/.github/scripts/build_wheel_in_container.sh "${{ matrix.backend }}"
+          ls -la "$RUNNER_TEMP/out"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheel-${{ matrix.backend }}
+          path: ${{ runner.temp }}/out/*.whl
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          [ "$(ls *.whl | wc -l)" = 2 ] || { ls -la; echo "expected 2 wheels" >&2; exit 1; }
+          sha256sum *.whl > SHA256SUMS
+          cat SHA256SUMS
+          cat > notes.md <<EOF
+          gsplat 1.4.0 with a ROCm (HIP) port, plus prebuilt wheels for torch 2.14.1 and python 3.12.
+
+          - \`+cu126\`: CUDA 12.6, sm_80 / sm_86 / sm_89, against torch 2.14.1 (cu126 index).
+          - \`+rocm714\`: ROCm 7.14, gfx1151 (Strix Halo), against torch 2.14.1+rocm7.14.
+
+          Built from ${GITHUB_SHA} by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}.
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file notes.md \
+            --verify-tag *.whl SHA256SUMS

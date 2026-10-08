@@ -9,6 +9,11 @@ from setuptools import find_packages, setup
 
 __version__ = None
 exec(open("gsplat/version.py", "r").read())
+# Optional PEP 440 local version label, e.g. GSPLAT_LOCAL_VERSION=cu126 builds 1.4.0+cu126, so wheels
+# for different backends of the same release get different filenames.
+LOCAL_VERSION = os.getenv("GSPLAT_LOCAL_VERSION", "")
+if LOCAL_VERSION:
+    __version__ = f"{__version__}+{LOCAL_VERSION}"
 
 URL = "https://github.com/nerfstudio-project/gsplat"
 

@@ -1,5 +1,10 @@
 # gsplat
 
+> **This fork:** gsplat 1.4.0 with a ROCm (HIP) port, plus prebuilt wheels for torch 2.14.1. The branch
+> `v1.4.0-rocm` is upstream `v1.4.0` with the port on top. `.github/workflows/wheels.yml` builds a CUDA 12.6 wheel
+> (`gsplat-1.4.0+cu126`, sm_80/86/89) and a ROCm 7.14 wheel (`gsplat-1.4.0+rocm714`, gfx1151) for python 3.12 and
+> attaches them to the release of each `v1.4.0-rocm.*` tag. `GSPLAT_LOCAL_VERSION` sets the local version label.
+
 [![Core Tests.](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml)
 [![Docs](https://github.com/nerfstudio-project/gsplat/actions/workflows/doc.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/doc.yml)
 
