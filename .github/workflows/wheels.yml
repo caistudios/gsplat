@@ -2,7 +2,8 @@
 #   cuda: CUDA 12.6, sm_80/86/89            -> gsplat-1.4.0+cu126-cp312-cp312-linux_x86_64.whl
 #   rocm: ROCm 7.14, gfx1151 (Strix Halo)   -> gsplat-1.4.0+rocm714-cp312-cp312-linux_x86_64.whl
 # No GPU is needed, only the compilers. A push to the branches below uploads the wheels as workflow artifacts.
-# A tag v1.4.0-rocm.* also publishes both wheels and a SHA256SUMS file as a GitHub Release named after the tag.
+# A tag v1.4.0-rocm.* also publishes both wheels and a SHA256SUMS file as a GitHub Release named after the tag
+# (a prerelease when the tag contains -rc).
 name: wheels
 
 on:
@@ -94,10 +95,20 @@ jobs:
           cat > notes.md <<EOF
           gsplat 1.4.0 with a ROCm (HIP) port, plus prebuilt wheels for torch 2.14.1 and python 3.12.
 
-          - \`+cu126\`: CUDA 12.6, sm_80 / sm_86 / sm_89, against torch 2.14.1 (cu126 index).
-          - \`+rocm714\`: ROCm 7.14, gfx1151 (Strix Halo), against torch 2.14.1+rocm7.14.
+          - \`cu126\` wheel: CUDA 12.6, sm_80 / sm_86 / sm_89, against torch 2.14.1 (cu126 index).
+          - \`rocm714\` wheel: ROCm 7.14, gfx1151 (Strix Halo), against torch 2.14.1+rocm7.14.
 
           Built from ${GITHUB_SHA} by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}.
+
+          \`\`\`
+          $(cat SHA256SUMS)
+          \`\`\`
           EOF
+          # A tag with -rc in it is a release candidate of an unmerged branch: publish it as a prerelease.
+          pre=()
+          case "$TAG" in
+            *-rc*) pre=(--prerelease)
+                   printf '\nRelease candidate: built from a branch under review, not merged into v1.4.0-rocm.\n' >> notes.md ;;
+          esac
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file notes.md \
-            --verify-tag *.whl SHA256SUMS
+            --verify-tag "${pre[@]}" *.whl SHA256SUMS
