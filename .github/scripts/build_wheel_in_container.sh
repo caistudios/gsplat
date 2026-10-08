@@ -46,5 +46,7 @@ echo "build took $(( $(date +%s) - start )) s"
 WHEEL=gsplat-1.4.0+$GSPLAT_LOCAL_VERSION-cp312-cp312-linux_x86_64.whl
 ls /tmp/dist
 [ "$(ls /tmp/dist)" = "$WHEEL" ] || { echo "expected exactly $WHEEL" >&2; exit 1; }
-python -m zipfile -l "/tmp/dist/$WHEEL" | grep -q 'gsplat/csrc.so' || { echo "gsplat/csrc.so missing" >&2; exit 1; }
+# List to a file first: grep -q stops reading at the first match, which breaks the pipe under pipefail.
+python -m zipfile -l "/tmp/dist/$WHEEL" > /tmp/wheel-files.txt
+grep -q 'gsplat/csrc.so' /tmp/wheel-files.txt || { echo "gsplat/csrc.so missing" >&2; exit 1; }
 cp "/tmp/dist/$WHEEL" /out/
