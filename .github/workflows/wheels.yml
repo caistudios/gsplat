@@ -1,14 +1,12 @@
 # Builds the gsplat 1.4.0 wheels of this branch for torch 2.14.1 and python 3.12:
 #   cuda: CUDA 12.6, sm_80/86/89            -> gsplat-1.4.0+cu126-cp312-cp312-linux_x86_64.whl
 #   rocm: ROCm 7.14, gfx1151 (Strix Halo)   -> gsplat-1.4.0+rocm714-cp312-cp312-linux_x86_64.whl
-# No GPU is needed, only the compilers. A push to the branches below uploads the wheels as workflow artifacts.
-# A tag v1.4.0-rocm.* also publishes both wheels and a SHA256SUMS file as a GitHub Release named after the tag
-# (a prerelease when the tag contains -rc).
+# No GPU is needed, only the compilers. A tag v1.4.0-rocm.* builds both and publishes them with a SHA256SUMS
+# file as a GitHub Release named after the tag (a prerelease when the tag contains -rc).
 name: wheels
 
 on:
   push:
-    branches: [v1.4.0-rocm, rocm-fast-and-culling]
     tags: ["v1.4.0-rocm.*"]
   workflow_dispatch:
 
