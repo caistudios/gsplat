@@ -64,8 +64,10 @@ __global__ void isect_tiles(
     int64_t *__restrict__ isect_ids,       // [n_isects]
     int32_t *__restrict__ flatten_ids,     // [n_isects]
     // optional: skip the tiles where the Gaussian's alpha stays below the rasterizer's 1/255 cutoff at every pixel
-    const T *__restrict__ conics,   // [C, N, 3] or [nnz, 3]
-    const T *__restrict__ opacities // [C, N] or [nnz]
+    const T *__restrict__ conics,    // [C, N, 3] or [nnz, 3]
+    const T *__restrict__ opacities, // [C, N] or [nnz]
+    // a Gaussian whose bbox covers more than this many tiles skips the check and lists every tile; < 0: no limit
+    const int64_t cull_max_tiles
 ) {
     // For now we'll upcast float16 and bfloat16 to float32
     using OpT = typename OpType<T>::type;
@@ -102,7 +104,11 @@ __global__ void isect_tiles(
     // The radius is a 3-sigma square around the mean: most of its tiles never see the Gaussian reach the
     // rasterizer's alpha cutoff (1/255), which skips it at every pixel there. Listing only the tiles where it can
     // reach the cutoff renders the same image (and gradients) with ~half the intersections to sort and visit.
-    const bool cull = conics != nullptr && opacities != nullptr;
+    // The check runs serially over a Gaussian's tiles, so a few huge Gaussians can stall the kernel: above
+    // cull_max_tiles, list every tile in the bbox as the unculled path does.
+    const int64_t bbox_tiles = (int64_t)(tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
+    const bool cull = conics != nullptr && opacities != nullptr &&
+                      (cull_max_tiles < 0 || bbox_tiles <= cull_max_tiles);
     vec3<OpT> conic(0.f);
     OpT opacity = 1.f;
     if (cull) {
@@ -173,8 +179,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     const uint32_t tile_height,
     const bool sort,
     const bool double_buffer,
-    const at::optional<torch::Tensor> &conics,   // [C, N, 3] or [nnz, 3]
-    const at::optional<torch::Tensor> &opacities // [C, N] or [nnz]
+    const at::optional<torch::Tensor> &conics,    // [C, N, 3] or [nnz, 3]
+    const at::optional<torch::Tensor> &opacities, // [C, N] or [nnz]
+    const int64_t cull_max_tiles
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
@@ -254,7 +261,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     nullptr,
                     nullptr,
                     conics.has_value() ? conics.value().data_ptr<scalar_t>() : nullptr,
-                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>() : nullptr
+                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>() : nullptr,
+                    cull_max_tiles
                 );
             }
         );
@@ -299,7 +307,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     isect_ids.data_ptr<int64_t>(),
                     flatten_ids.data_ptr<int32_t>(),
                     conics.has_value() ? conics.value().data_ptr<scalar_t>() : nullptr,
-                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>() : nullptr
+                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>() : nullptr,
+                    cull_max_tiles
                 );
             }
         );

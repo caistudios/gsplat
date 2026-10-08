@@ -51,6 +51,7 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
+    cull_max_tiles: Optional[int] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -181,6 +182,9 @@ def rasterization(
             and "fisheye". Default is "pinhole".
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [N, 3, 3], Default is None.
+        cull_max_tiles: Gaussians whose bbox covers more than this many tiles keep every tile instead of
+            skipping the ones below the alpha cutoff. None reads the env var GSPLAT_CULL_MAX_TILES; unset or
+            negative means no limit, 0 turns culling off. Default is None.
 
     Returns:
         A tuple:
@@ -507,6 +511,7 @@ def rasterization(
         gaussian_ids=gaussian_ids,
         conics=conics,
         opacities=opacities,
+        cull_max_tiles=cull_max_tiles,
     )
     # print("rank", world_rank, "Before isect_offset_encode")
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)

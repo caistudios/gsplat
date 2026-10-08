@@ -1,3 +1,4 @@
+import os
 from typing import Callable, Optional, Tuple, Any
 import warnings
 from typing_extensions import Literal
@@ -336,10 +337,13 @@ def isect_tiles(
     gaussian_ids: Optional[Tensor] = None,
     conics: Optional[Tensor] = None,
     opacities: Optional[Tensor] = None,
+    cull_max_tiles: Optional[int] = None,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Maps projected Gaussians to intersecting tiles.
 
     With conics and opacities, tiles where the Gaussian stays below the rasterizer's alpha cutoff are left out.
+    Gaussians whose bbox covers more than cull_max_tiles tiles skip that check and keep every tile. None reads
+    the env var GSPLAT_CULL_MAX_TILES at each call; unset or negative means no limit, 0 turns culling off.
 
     Args:
         means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
@@ -397,8 +401,16 @@ def isect_tiles(
         True,  # DoubleBuffer: memory efficient radixsort
         None if conics is None else conics.contiguous(),
         None if opacities is None else opacities.contiguous(),
+        _cull_max_tiles(cull_max_tiles),
     )
     return tiles_per_gauss, isect_ids, flatten_ids
+
+
+def _cull_max_tiles(cull_max_tiles: Optional[int]) -> int:
+    if cull_max_tiles is None:
+        env = os.environ.get("GSPLAT_CULL_MAX_TILES", "")
+        cull_max_tiles = int(env) if env else -1
+    return cull_max_tiles
 
 
 @torch.no_grad()
