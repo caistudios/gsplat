@@ -334,8 +334,12 @@ def isect_tiles(
     n_cameras: Optional[int] = None,
     camera_ids: Optional[Tensor] = None,
     gaussian_ids: Optional[Tensor] = None,
+    conics: Optional[Tensor] = None,
+    opacities: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Maps projected Gaussians to intersecting tiles.
+
+    With conics and opacities, tiles where the Gaussian stays below the rasterizer's alpha cutoff are left out.
 
     Args:
         means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
@@ -391,6 +395,8 @@ def isect_tiles(
         tile_height,
         sort,
         True,  # DoubleBuffer: memory efficient radixsort
+        None if conics is None else conics.contiguous(),
+        None if opacities is None else opacities.contiguous(),
     )
     return tiles_per_gauss, isect_ids, flatten_ids
 

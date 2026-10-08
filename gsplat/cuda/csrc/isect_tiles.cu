@@ -18,6 +18,32 @@ namespace cg = cooperative_groups;
  * Gaussian Tile Intersection
  ****************************************************************************/
 
+// The alpha check runs serially over a Gaussian's tiles. Past this many tiles it costs more than the
+// intersections it saves, so larger Gaussians skip it.
+constexpr int64_t CULL_MAX_TILES = 64;
+
+// Can a Gaussian (2D mean, conic, opacity) reach alpha >= 1/255 at a pixel centre of the tile [x, x + size) x
+// [y, y + size)? Conservative: the smallest sigma over the rectangle spanned by the pixel centres, with a 1% margin
+// on the cutoff for float rounding. Not inlined, so both passes of isect_tiles run the same instructions.
+template <typename T>
+__device__ __noinline__ bool tile_reaches_cutoff(
+    const vec2<T> mean2d, const vec3<T> conic, const T opacity, const uint32_t x, const uint32_t y, const uint32_t size
+) {
+    const T x0 = x + 0.5f - mean2d.x, x1 = x0 + size - 1;
+    const T y0 = y + 0.5f - mean2d.y, y1 = y0 + size - 1;
+    if (x0 <= 0 && x1 >= 0 && y0 <= 0 && y1 >= 0) {
+        return true;
+    }
+    // sigma = 0.5 (a dx^2 + c dy^2) + b dx dy is convex: its minimum over the rectangle lies on the boundary
+    const T a = conic.x, b = conic.y, c = conic.z;
+    auto sigma = [&](T dx, T dy) { return 0.5f * (a * dx * dx + c * dy * dy) + b * dx * dy; };
+    T best = sigma(x0, min(max(-b * x0 / c, y0), y1));
+    best = min(best, sigma(x1, min(max(-b * x1 / c, y0), y1)));
+    best = min(best, sigma(min(max(-b * y0 / a, x0), x1), y0));
+    best = min(best, sigma(min(max(-b * y1 / a, x0), x1), y1));
+    return opacity * __expf(-best) >= 0.99f / 255.f;
+}
+
 template <typename T>
 __global__ void isect_tiles(
     // if the data is [C, N, ...] or [nnz, ...] (packed)
@@ -40,7 +66,10 @@ __global__ void isect_tiles(
     const uint32_t tile_n_bits,
     int32_t *__restrict__ tiles_per_gauss, // [C, N] or [nnz]
     int64_t *__restrict__ isect_ids,       // [n_isects]
-    int32_t *__restrict__ flatten_ids      // [n_isects]
+    int32_t *__restrict__ flatten_ids,     // [n_isects]
+    // optional: skip the tiles where the Gaussian's alpha stays below the rasterizer's 1/255 cutoff at every pixel
+    const T *__restrict__ conics,   // [C, N, 3] or [nnz, 3]
+    const T *__restrict__ opacities // [C, N] or [nnz]
 ) {
     // For now we'll upcast float16 and bfloat16 to float32
     using OpT = typename OpType<T>::type;
@@ -74,11 +103,37 @@ __global__ void isect_tiles(
     tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius)), tile_width);
     tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius)), tile_height);
 
+    // The radius is a 3-sigma square around the mean: most of its tiles never see the Gaussian reach the
+    // rasterizer's alpha cutoff (1/255), which skips it at every pixel there. Listing only the tiles where it can
+    // reach the cutoff renders the same image (and gradients) with ~half the intersections to sort and visit.
+    // Above CULL_MAX_TILES the Gaussian keeps every tile in its bbox, as the unculled path does.
+    const int64_t bbox_tiles = (int64_t)(tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
+    const bool cull = conics != nullptr && opacities != nullptr && bbox_tiles <= CULL_MAX_TILES;
+    vec3<OpT> conic(0.f);
+    OpT opacity = 1.f;
+    if (cull) {
+        conic = vec3<OpT>(conics[3 * idx], conics[3 * idx + 1], conics[3 * idx + 2]);
+        opacity = opacities[idx];
+    }
+    auto reaches = [&](uint32_t ty, uint32_t tx) -> bool {
+        return !cull || tile_reaches_cutoff(mean2d, conic, opacity, tx * tile_size, ty * tile_size, tile_size);
+    };
+
     if (first_pass) {
         // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] = static_cast<int32_t>(
-            (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
-        );
+        if (cull) {
+            int32_t n = 0;
+            for (uint32_t i = tile_min.y; i < tile_max.y; ++i) {
+                for (uint32_t j = tile_min.x; j < tile_max.x; ++j) {
+                    n += reaches(i, j);
+                }
+            }
+            tiles_per_gauss[idx] = n;
+        } else {
+            tiles_per_gauss[idx] = static_cast<int32_t>(
+                (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+            );
+        }
         return;
     }
 
@@ -98,6 +153,9 @@ __global__ void isect_tiles(
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
     for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
         for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+            if (!reaches(i, j) || cur_idx >= cum_tiles_per_gauss[idx]) {
+                continue;
+            }
             int64_t tile_id = i * tile_width + j;
             // e.g. tile_n_bits = 22:
             // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
@@ -120,7 +178,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     const uint32_t tile_width,
     const uint32_t tile_height,
     const bool sort,
-    const bool double_buffer
+    const bool double_buffer,
+    const at::optional<torch::Tensor> &conics,   // [C, N, 3] or [nnz, 3]
+    const at::optional<torch::Tensor> &opacities // [C, N] or [nnz]
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
@@ -198,7 +258,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     tile_n_bits,
                     tiles_per_gauss.data_ptr<int32_t>(),
                     nullptr,
-                    nullptr
+                    nullptr,
+                    conics.has_value() ? conics.value().data_ptr<scalar_t>() : nullptr,
+                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>() : nullptr
                 );
             }
         );
@@ -241,7 +303,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     tile_n_bits,
                     nullptr,
                     isect_ids.data_ptr<int64_t>(),
-                    flatten_ids.data_ptr<int32_t>()
+                    flatten_ids.data_ptr<int32_t>(),
+                    conics.has_value() ? conics.value().data_ptr<scalar_t>() : nullptr,
+                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>() : nullptr
                 );
             }
         );
